@@ -1,0 +1,24 @@
+// proto/greeter.proto
+syntax = "proto3"; // 指定使用 proto3 语法
+
+package proto; // 定义包名
+
+// 这个选项告诉 protoc 编译器，生成的 Go 代码应该放在哪个包里
+option go_package = "./proto";
+
+// 定义一个叫 Greeter 的服务
+service Greeter {
+  // 这个服务里有一个叫 SayHello 的方法 (rpc)
+  // 它接收 HelloRequest 作为参数，返回 HelloReply
+  rpc SayHello (HelloRequest) returns (HelloReply);
+}
+
+// 定义 SayHello 方法的请求体
+message HelloRequest {
+  string name = 1; // 包含一个叫 name 的字符串字段
+}
+
+// 定义 SayHello 方法的响应体
+message HelloReply {
+  string message = 1; // 包含一个叫 message 的字符串字段
+}
