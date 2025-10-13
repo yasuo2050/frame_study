@@ -427,3 +427,254 @@ func main() {
 而“板块二：拦截器”要解决的问题就是：我们不想在每个业务函数（比如 `SayHello`）里都重复写一遍“提取和验证 Token”的代码。拦截器允许我们把这段公共逻辑抽离出来，自动应用到所有需要保护的 gRPC 方法上。
 
 你已经准备好进入下一个阶段了！
+
+-----
+
+# gRPC-Gateway
+
+好的，我们进入最后一个基础板块：**板块三：gRPC-Gateway**。
+
+这是连接你的“内部高效率办公室”和“外部公共世界”的桥梁。
+
+### **核心思想：为你的办公大楼建一个“对外接待大厅”**
+
+我们继续使用办公大楼的类比：
+
+* **gRPC 服务**：是你大楼内部的高效通信系统，只有内部员工（其他微服务）会用，速度快、规矩严明。
+* **外部访客**：比如 Web 浏览器、`curl` 工具、第三方的服务。他们不会说 gRPC 这种“内部方言”，他们只会说全世界通用的语言——HTTP/JSON。
+
+**问题来了**：一个只会说 HTTP 的外部访客，如何与你只懂 gRPC 的内部办公室通话？
+
+**解决方案**：gRPC-Gateway。它就是我们在大楼一层专门建立的一个“对外接待大厅”（Reception Hall）。
+
+这个接待大厅的作用是：
+
+1.  **接待访客**：它对外开放一个标准的 HTTP/JSON 网址（RESTful API）。
+2.  **翻译请求**：当接待员（Gateway）收到一个 HTTP/JSON 请求后，会把它“翻译”成 gRPC 格式的内部请求。
+3.  **内部通信**：接待员使用内部 gRPC 系统，将翻译好的请求发给对应的办公室（你的 gRPC 服务实现）。
+4.  **翻译响应**：办公室通过 gRPC 返回结果后，接待员再把它“翻译”回 HTTP/JSON 格式，返还给外部访客。
+
+通过这个“接待大厅”，我们的服务就实现了**双协议支持**：对内用 gRPC 高效通信，对外用 HTTP/JSON 提供标准接口。
+
+-----
+
+### **技术核心：`.proto` 文件中的 HTTP 注解**
+
+这个“翻译”工作是如何自动完成的？魔法就在于我们对“蓝图” (`.proto` 文件) 的扩展。我们需要在蓝图上明确标注出：“这个办公室的门口，对应着接待大廳的哪个窗口”。
+
+这就是通过 `google.api.http` 注解完成的。
+
+```protobuf
+rpc SayHello (HelloRequest) returns (HelloReply) {
+    // 这个注解就是告诉“接待大厅”构建图纸
+    option (google.api.http) = {
+      // 当一个 POST 请求访问 /v1/sayhello 这个路径时...
+      post: "/v1/sayhello",
+      // ...把 HTTP 请求的整个 body 内容 (*) 当作 HelloRequest
+      body: "*"
+    };
+}
+```
+
+当你用 `protoc` 编译这份带有注解的蓝图时，它不仅会生成 gRPC 的代码，还会额外生成一个 **Gateway 的代码文件**，里面包含了所有“翻译”逻辑。
+
+-----
+
+### **动手实践：让我们的服务能被 `curl` 调用**
+
+我们的目标是改造现有项目，让我们可以通过一个简单的 `curl` 命令来调用 `SayHello` 服务。
+
+#### **第 1 步：升级蓝图 (`proto/greeter.proto`)**
+
+首先，我们需要在 `.proto` 文件中添加 HTTP 注解。
+
+1.  **引入注解定义**：在文件顶部增加 `import "google/api/annotations.proto";`。
+2.  **添加 HTTP 规则**：在 `rpc SayHello` 中添加 `option (google.api.http)`。
+
+**修改后的 `proto/greeter.proto`：**
+
+```protobuf
+// proto/greeter.proto
+syntax = "proto3";
+
+package proto;
+
+// --- 变化点 1: 引入 Google 的 HTTP 注解定义文件 ---
+import "google/api/annotations.proto";
+
+option go_package = "./proto";
+
+service Greeter {
+  rpc SayHello (HelloRequest) returns (HelloReply) {
+    // --- 变化点 2: 添加 HTTP 映射规则 ---
+    option (google.api.http) = {
+      // 定义一个 POST 接口，路径是 /v1/sayhello
+      // body: "*" 表示将 HTTP 请求的 JSON body 完整地映射到 HelloRequest
+      post: "/v1/sayhello",
+      body: "*"
+    };
+  }
+}
+
+message HelloRequest {
+  string name = 1;
+}
+
+message HelloReply {
+  string message = 1;
+}
+```
+
+#### **第 2 步：重新施工 (重新生成代码)**
+
+**这一步至关重要！** 因为我们修改了蓝图，所以必须重新运行 `protoc` 来生成新的代码，其中就包括 Gateway 的代码。
+
+1.  **安装 Gateway 生成器** (如果没装过)：
+    ```bash
+    go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@latest
+    ```
+2.  **执行新的生成命令**：
+    在项目根目录 (`grpc-learning/`) 下运行。注意，我们增加了一个 `--grpc-gateway_out=.` 选项。
+    ```bash
+    protoc --go_out=. --go-grpc_out=. \
+           --grpc-gateway_out=. \
+           proto/greeter.proto
+    ```
+    执行成功后，你会发现 `proto` 目录下多了一个新文件：`greeter.pb.gw.go`。这就是我们的“接待大厅”的核心代码。
+
+#### **第 3 步：改造大楼 (`server/main.go`)，同时运行两个服务**
+
+这是最复杂的一步，也是 `serverx` 这样的框架帮你做得最多的工作。我们需要在一个程序里，同时启动 gRPC 服务和 HTTP Gateway 服务，并让它们共用一个端口。
+
+**修改后的 `server/main.go`：**
+
+```go
+// server/main.go
+package main
+
+import (
+	"context"
+	"log"
+	"net/http" // 引入 http 包
+	"strings"
+
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime" // 引入 gateway 的 runtime
+	"golang.org/x/net/http2"                            // h2c 支持
+	"golang.org/x/net/http2/h2c"                        // h2c 支持
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
+	pb "grpc-learning/proto"
+)
+
+// server struct 和 SayHello 方法保持不变 (依然是干净的业务逻辑)
+type server struct {
+	pb.UnimplementedGreeterServer
+}
+
+func (s *server) SayHello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloReply, error) {
+	log.Println("==> SayHello 业务逻辑被执行 <==")
+	return &pb.HelloReply{Message: "你好, " + in.GetName()}, nil
+}
+
+// 拦截器也保持不变
+func authInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	// ... (代码和之前一样，这里省略)
+	return handler(ctx, req)
+}
+
+func main() {
+	// --- 1. 启动 gRPC 服务 (和之前类似，但不立即 Serve) ---
+	address := "0.0.0.0:50051"
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(authInterceptor))
+	pb.RegisterGreeterServer(grpcServer, &server{})
+	log.Println("gRPC 服务已准备...")
+
+	// --- 2. 启动 HTTP Gateway 服务 ---
+	ctx := context.Background()
+	gwmux := runtime.NewServeMux() // 创建 gateway 的 Mux
+	// 从 gRPC endpoint 注册 Greeter 服务的 HTTP handler
+	err := pb.RegisterGreeterHandlerFromEndpoint(
+		ctx,
+		gwmux,
+		address, // gRPC 服务的地址
+		[]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+	)
+	if err != nil {
+		log.Fatalf("注册 HTTP Gateway 失败: %v", err)
+	}
+	log.Println("HTTP Gateway 已准备...")
+
+	// --- 3. 将 gRPC 和 HTTP 服务合并到同一个端口 ---
+	// 这是实现端口复用的关键：我们创建一个顶层的 Handler
+	// 它会根据请求的类型，决定把请求交给 gRPC Server 还是 HTTP Gateway
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 如果请求的 Content-Type 是 application/grpc，说明是 gRPC 请求
+		if r.ProtoMajor == 2 && strings.Contains(r.Header.Get("Content-Type"), "application/grpc") {
+			grpcServer.ServeHTTP(w, r)
+		} else {
+			// 否则，就是普通的 HTTP 请求，交给 Gateway 处理
+			gwmux.ServeHTTP(w, r)
+		}
+	})
+
+	log.Printf("服务启动在 %s (同时支持 gRPC 和 HTTP)", address)
+	// 使用 h2c 来包裹我们的 handler，使其能同时处理 HTTP/1.1 和 HTTP/2
+	err = http.ListenAndServe(address, h2c.NewHandler(handler, &http2.Server{}))
+	if err != nil {
+		log.Fatalf("服务启动失败: %v", err)
+	}
+}
+```
+
+-----
+### **第 4 步：用全新的方式测试**
+
+现在，你的服务已经同时是“内部办公系统”和“对外接待大厅”了。
+
+1.  **启动合并后的服务**：
+
+    ```bash
+    go run server/main.go
+    ```
+
+2.  **测试场景一：内部员工 (gRPC Client) 访问**
+    在另一个终端，运行我们之前的 gRPC 客户端，确保它依然工作。
+
+    ```bash
+    go run client/main.go
+    ```
+
+    你会看到一切正常，服务端会打印拦截器和业务逻辑的日志。
+
+3.  **测试场景二：外部访客 (`curl`) 访问**
+    再打开一个**新的终端**，这次我们扮演一个只会说 HTTP/JSON 的访客。
+
+    > 注意：因为我们的拦截器会验证 token，所以 `curl` 无法通过。请**暂时**注释掉 `server/main.go` 中注册拦截器的代码行，然后重启服务，再进行测试。
+    > `s := grpc.NewServer()` // 暂时去掉拦截器
+
+    执行以下 `curl` 命令：
+
+    ```bash
+    curl -X POST -H "Content-Type: application/json" \
+         -d '{"name": "外部访客"}' \
+         http://localhost:50051/v1/sayhello
+    ```
+
+    你会收到一个 JSON 响应：
+
+    ```json
+    {"message":"你好, 外部访客"}
+    ```
+
+    同时，服务端会打印 `==> SayHello 业务逻辑被执行 <==`。这证明外部的 HTTP 请求，被成功“翻译”并由我们的 gRPC 服务处理了！
+
+### **最后的总结：`serverx` 的真正价值**
+
+现在回头看 `server/main.go` 的 `main` 函数，你就会发现它变得非常复杂。**而这些复杂的、与业务无关的启动流程，正是 `serverx` 帮你封装掉的所有东西**。
+
+* `serverx.WithGrpcRegisters(...)` 帮你做了步骤 1。
+* `serverx.WithHttpRegisters(...)` 帮你做了步骤 2。
+* `s.Run()` 帮你做了最复杂的步骤 3。
+
+通过亲手实践这三个板块，你不仅学会了 gRPC 的核心技术，更重要的是，你深刻理解了为什么我们需要 `serverx` 这样的应用层框架，以及它背后所遵循的设计哲学和行业最佳实践。你已经具备了从“使用者”到“设计者”的视角。

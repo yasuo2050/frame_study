@@ -3,6 +3,9 @@ syntax = "proto3"; // 指定使用 proto3 语法
 
 package proto; // 定义包名
 
+// --- 变化点 1: 引入 Google 的 HTTP 注解定义文件 ---
+import "google/api/annotations.proto";
+
 // 这个选项告诉 protoc 编译器，生成的 Go 代码应该放在哪个包里
 option go_package = "./proto";
 
@@ -10,7 +13,15 @@ option go_package = "./proto";
 service Greeter {
   // 这个服务里有一个叫 SayHello 的方法 (rpc)
   // 它接收 HelloRequest 作为参数，返回 HelloReply
-  rpc SayHello (HelloRequest) returns (HelloReply);
+  rpc SayHello (HelloRequest) returns (HelloReply) {
+    // --- 变化点 2: 添加 HTTP 映射规则 ---
+    option (google.api.http) = {
+      // 定义一个 POST 接口，路径是 /v1/sayhello
+      // body: "*" 表示将 HTTP 请求的 JSON body 完整地映射到 HelloRequest
+      post: "/v1/sayhello",
+      body: "*"
+    };
+  };
 }
 
 // 定义 SayHello 方法的请求体
